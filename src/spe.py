@@ -237,6 +237,12 @@ STEP 3 - Read the claim the way a competent engineer would, then look for a coun
   idea is a different claim and you were not asked it. Importing an unstated
   standard - best practice, a style rule, what you would have written - to rule VIOLATES is the
   same mistake as inventing a defect for a vague claim.
+  Concretely: "add(a, b) returns the sum of its two arguments" against `return a + b` is
+  CONFORMS. That `add("a", "b")` returns "ab" is NOT a counterexample - the claim did not say
+  the arguments are numbers, and inventing that restriction so you can break it is the single
+  most common way this check goes wrong. The same goes for None, huge values, and every other
+  input the author did not claim anything about. Ask only: on the inputs the claim is about,
+  does the artifact do what it says?
   Do NOT return UNVERIFIABLE merely because the claim omits detail a pedant could ask for.
   Unstated argument types, unstated limits, and unhandled exotic inputs are NOT reasons to
   refuse a verdict when the ordinary reading is clear. If the claim holds on that ordinary
@@ -411,8 +417,13 @@ def call_reviewer(artifact, notes, model=None, timeout=75):
     msg = d["choices"][0]["message"]
     return extract_json(msg.get("content") or msg.get("reasoning_content") or "")
 
-VERIFY_PROMPT = """A reviewer claims the artifact below contains a defect. Your job is to check that \
-claim adversarially. Do not be agreeable: a wrong finding costs the author more than a missed one.
+VERIFY_PROMPT = """A reviewer says the artifact below contains a defect. Decide independently \
+whether the artifact really does what the finding says it does.
+
+Both errors are expensive and neither is the safe answer. Confirming a wrong finding sends the \
+author to rewrite code that works. Disputing a right one sends them to publish a defect they had \
+been told about. Reaching for "false" because it feels cautious is not caution - it makes this \
+check worthless. Decide from the code.
 
 CLAIMED DEFECT
 severity: %s
@@ -426,8 +437,12 @@ Answer STRICT JSON only:
 {"confirmed": true|false, "failing_input": "a concrete input or call where the artifact really does \
 misbehave, or empty if none exists", "why": "one sentence"}
 
-Set confirmed=false if the artifact actually behaves correctly, if the reproduction does not follow \
-from the code, or if the claimed defect depends on reading the code differently than it is written."""
+Set confirmed=true when the code really does behave as the finding describes - trace the path \
+yourself and say where it goes wrong. The reproduction does not have to be worded the way you \
+would word it; what matters is whether the defect is there.
+Set confirmed=false when the artifact behaves correctly, when the reproduction does not follow \
+from the code as written, or when the finding depends on a requirement nobody stated - a missing \
+type check, missing logging or missing tests is not a defect unless the artifact promised it."""
 
 # Verification must come from a different model than the one that wrote the finding.
 # A model asked to check its own work agrees with itself; that is the failure this
