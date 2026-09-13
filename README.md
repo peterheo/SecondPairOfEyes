@@ -73,8 +73,9 @@ Three verdicts, and the third one matters most:
 - **VIOLATES** — a counterexample quoted from your artifact, with findings attached.
 - **CONFORMS** — the artifact satisfies the claim *as written*, with the line that does the work
   quoted. A pass that quotes nothing is downgraded to UNVERIFIABLE before it reaches you.
-- **UNVERIFIABLE** — the claim names no test that could fail ("enterprise grade"), or checking it
-  needs code you did not send. You get the falsifiable rewrite you should have claimed instead,
+- **UNVERIFIABLE** — the claim names no test that could fail ("enterprise grade"), checking it
+  needs code you did not send, or **the artifact only restates the claim instead of implementing
+  it** (a service card saying "limit: 1MB" is not evidence that oversized requests are rejected). You get the falsifiable rewrite you should have claimed instead,
   no invented defect, **and no charge**.
 
 ### A finding

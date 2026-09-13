@@ -57,6 +57,14 @@ different family. Disputed findings are labelled, not hidden, and confirmed ones
 
 `artifact_sha256` binds every verdict to the exact bytes you sent.
 
+## A claim is never its own evidence
+
+If you send a service card claiming "requests over 1MB are rejected", the card is the claim again
+in your own voice — not the mechanism. That comes back **UNVERIFIABLE**, naming what would settle
+it, and you are not billed. Send the handler instead. A comment asserting conformance never
+overrides the code beneath it: if the code violates the claim, the verdict is VIOLATES no matter
+what the comment says.
+
 ## What it is not
 
 Not an attestation, certification, proof, or verification of ownership. `submitter` is a

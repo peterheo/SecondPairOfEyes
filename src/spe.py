@@ -185,6 +185,17 @@ STEP 2 - Can you settle it from what you were given?
   -> If the claim is about code, data or behaviour that is NOT in the artifact, verdict
      UNVERIFIABLE. Name the missing piece. Do NOT guess.
 
+STEP 2b - Does the artifact IMPLEMENT the claim, or merely ASSERT it?
+A claim is never its own evidence. Documentation, a service card, a README, prose, or a comment
+that states the behaviour is true is NOT evidence that the behaviour is true. "Limits: requests up
+to 1MB" in a service card does not show that oversized requests are rejected; it is the claim
+again, in the artifact's own voice.
+  -> If the only support you can find is the artifact asserting the claim, verdict UNVERIFIABLE.
+     Say that the artifact describes the behaviour but does not contain the mechanism, and name
+     what would settle it (the handler, the check, the code path).
+  -> A comment that asserts conformance never overrides the code beneath it. If the code violates
+     the claim, the verdict is VIOLATES no matter what the comment says.
+
 STEP 3 - Read the claim the way a competent engineer would, then look for a counterexample.
   -> Found one you can quote from the artifact: verdict VIOLATES, with the counterexample.
   -> Looked and found none: verdict CONFORMS.
@@ -223,6 +234,10 @@ Worked examples of the verdict line only:
     -> CONFORMS   (unstated types are not grounds for UNVERIFIABLE)
   claim "this code is enterprise grade", artifact is any code
     -> UNVERIFIABLE  (no finding; "enterprise grade" names no failing test)
+  claim "the service rejects requests over 1MB", artifact is a card reading "Limits: up to 1MB"
+    -> UNVERIFIABLE  (the artifact restates the claim; it does not implement it)
+  claim "the API key is never logged", artifact logs the key under a comment saying it does not
+    -> VIOLATES  (the code rules, never the comment)
 """
 
 REVIEW_PROMPT = """You are an independent reviewer. Review ONLY the artifact below, which its author \
@@ -259,6 +274,21 @@ def extract_json(text):
     if i >= 0 and j > i: t = t[i:j+1]
     return json.loads(t)
 
+def quotes_artifact(evidence, artifact, minlen=12):
+    """True if some substantial fragment of the evidence is literally in the artifact.
+
+    Models splice non-adjacent lines together when quoting, so whole-string containment
+    is too strict; a fabricated quote shares no fragment at all, which is what this catches.
+    """
+    norm = lambda t: re.sub(r"\s+", " ", t or "").strip().lower()
+    hay = norm(artifact)
+    for frag in re.split(r"[\n;]+|\s{3,}", evidence or ""):
+        f = norm(frag)
+        if len(f) >= minlen and f in hay:
+            return True
+    return False
+
+
 def call_claim(artifact, claim, model=None, timeout=75):
     """Check one claim. Returns (verdict, reason, findings)."""
     art = artifact if len(artifact) <= MAX_ARTIFACT_CHARS else (
@@ -285,7 +315,12 @@ def call_claim(artifact, claim, model=None, timeout=75):
     for f in findings:
         kind = str(f.get("reproduction_kind", "")).lower()
         f["reproduction_kind"] = kind if kind in ("executable", "conceptual") else "conceptual"
-    if verdict == "CONFORMS" and not evidence.strip():
+    if verdict == "CONFORMS" and evidence.strip() and not quotes_artifact(evidence, artifact):
+        # A pass supported by a line that is not in the artifact is a fabricated quote.
+        verdict = "UNVERIFIABLE"
+        reason = ("the evidence offered for this pass does not appear in the artifact as quoted; "
+                  "treat the claim as unchecked. " + reason)[:400]
+    elif verdict == "CONFORMS" and not evidence.strip():
         # A pass with nothing quoted behind it is an opinion, not a check.
         verdict = "UNVERIFIABLE"
         reason = ("the checker passed the claim but quoted no line of the artifact to support it; "
