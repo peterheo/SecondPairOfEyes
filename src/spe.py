@@ -251,6 +251,11 @@ STEP 3 - Read the claim the way a competent engineer would, then look for a coun
 Return STRICT JSON only:
 {"claim_verdict":"VIOLATES|CONFORMS|UNVERIFIABLE",
  "verdict_reason":"one sentence; for UNVERIFIABLE, what would make the claim checkable",
+ "pass_depends_on":"if your answer relies on what some function, method or module DOES, and its
+   body is not in the artifact, name it here - just the name. sanitize, validate, verify_x,
+   audit_write and put_raw are names, not behaviour, and you have not seen what they do. Leave
+   this empty ONLY when the answer rests on the artifact's own control flow - the order calls
+   happen in, or whether a path is reachable - which you can see without the callee.",
  "verdict_evidence":"for CONFORMS and VIOLATES, the exact line(s) quoted from the artifact that
    settle it. A CONFORMS verdict with no quoted line is worthless; quote the line that does the
    work the claim promises. Empty string for UNVERIFIABLE.",
@@ -372,6 +377,17 @@ def call_claim(artifact, claim, model=None, timeout=75):
         raise RuntimeError("model returned no usable verdict")
     reason = str(out.get("verdict_reason", ""))[:400]
     evidence = str(out.get("verdict_evidence", ""))[:600]
+    depends = re.sub(r"[^A-Za-z0-9_.]", "", str(out.get("pass_depends_on", "") or ""))[:60]
+    if depends and depends.lower() not in ("none", "null", "na", "n/a", "empty"):
+        # The model has just told us its answer rests on a function it never saw. Asking it to
+        # NAME the dependency works where asking it to reason about one did not: a checker will
+        # rule CONFORMS on `clean = sanitize(term)` and, in the same breath, name sanitize.
+        # So the model reports and the code decides.
+        verdict = "UNVERIFIABLE"
+        reason = ("this answer would depend on what %s does, and %s is called but not defined in "
+                  "the artifact - its name is not its behaviour. Send %s and ask again. "
+                  % (depends, depends, depends) + reason)[:400]
+        findings = []
     findings = validate_findings(out) if verdict == "VIOLATES" else []
     for f in findings:
         kind = str(f.get("reproduction_kind", "")).lower()

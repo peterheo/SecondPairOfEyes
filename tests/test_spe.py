@@ -265,11 +265,15 @@ if rv.get("autonomous"):
 
     # A helper's name is not its behaviour. The dangerous version of this is a claim that
     # turns on a callee the buyer did not send, where a confident guess reads as a check.
+    # NB: the claim here is deliberately about BEHAVIOUR, not ordering. "input is sanitized
+    # before it reaches the query" is ambiguous - it can be read as "the sanitize step
+    # happens first", which IS visible without the callee - and a test built on an ambiguous
+    # claim measures the wording, not the checker.
     st, c6 = call("POST","/v1/reviews",{"artifact":
         'def search(term):\n    clean = sanitize(term)\n'
         '    return db.execute("SELECT * FROM items WHERE name = " + clean)\n',
         "purpose":"review-my-own-submission","submitter":"test-harness",
-        "claims":["user input is sanitized before it reaches the query"]})
+        "claims":["no value of term can change the structure of the SQL statement"]})
     capc6 = "/r/"+c6["retrieval_url"].rsplit("/r/",1)[1]
     vc6 = {}
     for _ in range(45):
@@ -281,6 +285,8 @@ if rv.get("autonomous"):
           crs6 and crs6[0].get("verdict")=="UNVERIFIABLE", crs6)
     check("and the missing symbol is named so the buyer knows what to send",
           crs6 and "sanitize" in (crs6[0].get("reason") or ""), crs6 and crs6[0].get("reason"))
+    check("a pass that would rest on an unseen callee is never billed",
+          crs6 and not crs6[0].get("billable"), crs6 and crs6[0].get("billable"))
 
     # ... but order and reachability are visible even when the callee is not. This is the
     # check that stops the guard above from turning into blanket abstention.
