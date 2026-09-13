@@ -131,6 +131,92 @@ if rv.get("autonomous"):
     check("turnaround is inside the advertised 5 minutes",
           (v2.get("turnaround_seconds") or 999) < 300, v2.get("turnaround_seconds"))
 
+print("\n9. CLAIM MODE (v2): A VERDICT PER CLAIM, OR AN HONEST UNVERIFIABLE")
+st, r = call("POST","/v1/reviews",{"artifact":"x","purpose":"review-my-own-submission",
+    "submitter":"test-harness","claims":["ok"]*(9)})
+check("more than the advertised claim limit is rejected", st==400, (st,r))
+st, r = call("POST","/v1/reviews",{"artifact":"x","purpose":"review-my-own-submission",
+    "submitter":"test-harness","claims":["c"*500]})
+check("an unsplittable 500-char claim is rejected, not silently truncated", st==400, (st,r))
+st, r = call("POST","/v1/reviews",{"artifact":"x","purpose":"review-my-own-submission",
+    "submitter":"test-harness","claims":[]})
+check("an empty claims list is rejected", st==400, (st,r))
+
+ART_VIOLATES = ("def charge(user, amount, attempt=0):\n"
+                "    post_to_ledger(user, amount)\n"
+                "    if not confirm(user):\n"
+                "        return charge(user, amount, attempt+1)   # retry\n")
+st, c1 = call("POST","/v1/reviews",{"artifact":ART_VIOLATES,"purpose":"review-my-own-submission",
+    "submitter":"test-harness","claims":["the retry path never charges a user twice"]})
+check("claim submission is priced per claim, not at the open-review rate",
+      st==201 and c1.get("price_credits")==1 and c1.get("mode")=="claim-check", (st,c1))
+check("the artifact hash is returned so the buyer can bind the verdict to what they sent",
+      len(c1.get("artifact_sha256") or "")==64, c1.get("artifact_sha256"))
+import hashlib
+check("the returned hash is the hash of the bytes submitted",
+      c1.get("artifact_sha256")==hashlib.sha256(ART_VIOLATES.encode()).hexdigest())
+
+if rv.get("autonomous"):
+    capc = "/r/"+c1["retrieval_url"].rsplit("/r/",1)[1]
+    vc = {}
+    for _ in range(45):
+        time.sleep(4)
+        st, vc = call("GET",capc)
+        if vc.get("status") in ("complete","needs_human"): break
+    check("a claim check completes without a human", vc.get("status")=="complete", vc.get("status"))
+    crs = vc.get("claim_results") or []
+    check("exactly one verdict per claim submitted", len(crs)==1, crs)
+    check("the verdict is one of the three advertised values",
+          crs and crs[0].get("verdict") in ("VIOLATES","CONFORMS","UNVERIFIABLE"), crs)
+    check("a double-charge on the retry path is caught, not passed",
+          crs and crs[0].get("verdict")=="VIOLATES", crs and crs[0].get("verdict"))
+    check("every finding is tied to the claim it falsifies",
+          all(f.get("claim_id") for f in vc.get("findings",[])), vc.get("findings"))
+    check("a VIOLATES verdict quotes the line that settles it",
+          crs and len(crs[0].get("evidence") or "")>10, crs and crs[0].get("evidence"))
+    check("each reproduction is labelled executable or conceptual, never left ambiguous",
+          all(f.get("reproduction_kind") in ("executable","conceptual") for f in vc.get("findings",[])),
+          [f.get("reproduction_kind") for f in vc.get("findings",[])])
+    check("a settled claim is billed at the quoted rate",
+          vc.get("price_credits")==1 and vc.get("billable_claims")==1, vc.get("billing_note"))
+
+    st, c2 = call("POST","/v1/reviews",{"artifact":"def add(a, b):\n    return a + b\n",
+        "purpose":"review-my-own-submission","submitter":"test-harness",
+        "claims":["add(a, b) returns the sum of its two arguments"]})
+    capc2 = "/r/"+c2["retrieval_url"].rsplit("/r/",1)[1]
+    vc2 = {}
+    for _ in range(45):
+        time.sleep(4)
+        st, vc2 = call("GET",capc2)
+        if vc2.get("status") in ("complete","needs_human"): break
+    crs2 = (vc2.get("claim_results") or [])
+    check("a claim the artifact actually satisfies comes back CONFORMS",
+          crs2 and crs2[0].get("verdict")=="CONFORMS", crs2)
+    check("CONFORMS carries no findings - a satisfied claim is not a defect",
+          crs2 and not vc2.get("findings"), vc2.get("findings"))
+    check("a CONFORMS verdict cites affirmative evidence, not just an opinion",
+          crs2 and len(crs2[0].get("evidence") or "")>10, crs2 and crs2[0].get("evidence"))
+
+    st, c3 = call("POST","/v1/reviews",{"artifact":"def add(a, b):\n    return a + b\n",
+        "purpose":"review-my-own-submission","submitter":"test-harness",
+        "claims":["this code is enterprise grade and follows best practices"]})
+    capc3 = "/r/"+c3["retrieval_url"].rsplit("/r/",1)[1]
+    vc3 = {}
+    for _ in range(45):
+        time.sleep(4)
+        st, vc3 = call("GET",capc3)
+        if vc3.get("status") in ("complete","needs_human"): break
+    crs3 = (vc3.get("claim_results") or [])
+    check("an unfalsifiable claim returns UNVERIFIABLE instead of an invented defect",
+          crs3 and crs3[0].get("verdict")=="UNVERIFIABLE", crs3)
+    check("UNVERIFIABLE says what would make the claim checkable",
+          crs3 and len(crs3[0].get("reason") or "")>10, crs3)
+    check("an UNVERIFIABLE claim is NOT billed - no verdict, no charge",
+          vc3.get("price_credits")==0 and vc3.get("billable_claims")==0,
+          (vc3.get("price_credits"), vc3.get("billing_note")))
+    check("the quoted price is stated as a maximum, not the amount charged",
+          vc3.get("price_quoted")==1, vc3.get("price_quoted"))
+
 print("\n8. DECISION LOG")
 st, d = call("GET","/v1/decisions")
 kinds = [(e["decision"]) for e in d["items"]]

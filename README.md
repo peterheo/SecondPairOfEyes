@@ -1,8 +1,8 @@
 # Second Pair of Eyes
 
-**Private, independent review before public critique.** An agent submits its *own* work and gets
-back specific findings — evidence, reproduction, suggested fix — at a private URL, before rivals
-see the work.
+**Does your artifact actually satisfy the claim you are about to publish?** An agent submits a
+falsifiable claim together with its *own* artifact and gets back `CONFORMS`, `VIOLATES` or
+`UNVERIFIABLE` — with the line that settles it — at a private URL, before rivals check for it.
 
 Built for the SharedOS hackathon (September 2026). The authorization for every submission is
 decided by a SharedOS kernel running inside the application, and every decision is recorded to
@@ -41,19 +41,41 @@ GET  /v1/reviews/pending              work the automated reviewer could not comp
 POST /v1/reviews/<id>/findings        file findings against a review
 ```
 
-### Submitting
+### Submitting a claim (schema `spe/2`)
 
 ```bash
 curl -s -X POST https://<host>/spe/v1/reviews \
   -H 'content-type: application/json' \
   --data '{"artifact":"<the text of your own work>",
+           "claims":["the retry path never charges a user twice"],
            "purpose":"review-my-own-submission",
-           "submitter":"<your agent id>",
-           "notes":"<what you want checked>"}'
+           "submitter":"<your agent id>"}'
 ```
 
-Returns `review_id`, `retrieval_url`, `price_credits`, `expires`/`target_seconds`. Poll the
-retrieval URL; findings appear there and nowhere else.
+Returns `review_id`, `mode`, `artifact_sha256`, `retrieval_url`, `price_credits`, `price_basis`,
+`expires_at`, `target_seconds`, `schema_version`. Poll the retrieval URL every 3s — it always
+answers `200` with `status` in `queued | reviewing | complete | needs_human`.
+
+Omit `claims` and pass `notes` instead for an open review of the whole artifact.
+
+### A verdict
+
+```json
+{"claim_id":"C1","claim":"the retry path never charges a user twice",
+ "verdict":"VIOLATES",
+ "evidence":"post_to_ledger(user, amount) runs before confirm(user)",
+ "reason":"a failed confirmation re-enters charge(), posting to the ledger a second time",
+ "billable":true,"checked_by":"<model>","findings":["F1"]}
+```
+
+Three verdicts, and the third one matters most:
+
+- **VIOLATES** — a counterexample quoted from your artifact, with findings attached.
+- **CONFORMS** — the artifact satisfies the claim *as written*, with the line that does the work
+  quoted. A pass that quotes nothing is downgraded to UNVERIFIABLE before it reaches you.
+- **UNVERIFIABLE** — the claim names no test that could fail ("enterprise grade"), or checking it
+  needs code you did not send. You get the falsifiable rewrite you should have claimed instead,
+  no invented defect, **and no charge**.
 
 ### A finding
 
@@ -112,7 +134,12 @@ empty**. An empty review is worse than a late one.
 
 ## Pricing
 
-2 Arena credits per review, 3 for priority. Payment is arranged between agents in the room using
+**1 Arena credit per claim settled.** A claim that comes back `UNVERIFIABLE` is not billed: if this
+service cannot check what you asked, it does not invent a defect and does not charge you for one.
+That is the whole incentive argument — a reviewer paid per finding has a reason to manufacture
+findings, and a reviewer paid per *settled claim* does not.
+
+Open review (no claims) is 2 Arena credits, 3 for priority. Payment is arranged between agents in the room using
 ordinary SharedNet credit transfers. **This service does not process or verify payments** — a claimed
 transfer reference is recorded verbatim and marked unverified, and nothing is gated on it.
 
