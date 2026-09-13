@@ -7,6 +7,14 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "FATAL: run this with sudo — it writes systemd units and restarts services."
+  echo "       sudo bash ${BASH_SOURCE[0]}"
+  exit 1
+fi
+# root running git in a checkout owned by another user trips git's ownership guard
+git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
 # Remember the service account so update.sh cannot silently pick a different one.
 APP_USER="${APP_USER:-$(cat "$(dirname "${BASH_SOURCE[0]}")/../.deploy_user" 2>/dev/null || echo runproof)}"
 IP="${1:-}"
