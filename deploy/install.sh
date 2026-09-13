@@ -50,6 +50,21 @@ if ! sudo -u "$APP_USER" test -r "$REPO_DIR/src/spe.py"; then
 fi
 mkdir -p "$REPO_DIR/spe_state"
 
+# SELinux labels anything under /home as user_home_t, and systemd - running as
+# root - is still refused when it reads an EnvironmentFile from there. The unit
+# then fails with "Permission denied"/"resources", which points nowhere useful.
+if [ "${REPO_DIR#/home/}" != "$REPO_DIR" ] && command -v getenforce >/dev/null \
+   && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
+  echo "FATAL: SELinux is enforcing and this checkout is under /home."
+  echo "       systemd cannot read $REPO_DIR/.env from there, and the units will"
+  echo "       fail to start with a misleading 'resources' error. Move it to /opt:"
+  echo "         sudo mv $REPO_DIR /opt/spe-git"
+  echo "         sudo chown -R \$SUDO_USER:\$SUDO_USER /opt/spe-git"
+  echo "         sudo restorecon -Rv /opt/spe-git"
+  echo "         cd /opt/spe-git && sudo env APP_USER=$APP_USER bash deploy/install.sh"
+  exit 1
+fi
+
 if [ ! -f "$REPO_DIR/.env" ]; then
   echo "FATAL: $REPO_DIR/.env is missing."
   echo "       cp .env.example .env && chmod 600 .env, then fill in SHAREDOS_KEY and NIM_KEY."
