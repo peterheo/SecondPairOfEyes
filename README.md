@@ -133,9 +133,27 @@ through a 60/minute limit.
 When the upstream model stalls, the review is **escalated to a human queue rather than published
 empty**. An empty review is worse than a late one.
 
+## Settle it by running it
+
+`"execute": true` and the checker stops reading and starts running: it writes a program whose
+only job is to falsify your claim, runs it against your artifact in a sandbox, and returns what
+happened. An observed falsification outranks the static read in both directions; a static
+VIOLATES the run cannot reproduce settles nothing and is not billed. Every falsification is
+adjudicated by a second model that is shown the program, because the way this fails is a program
+asserting something the claim never said. A falsifier that crashes on your API gets one repair
+attempt with the traceback fed back.
+
+Sandbox: network namespace with no interfaces, unprivileged uid, address/process/file-size/CPU
+limits, wall-clock kill, temporary cwd. **The host filesystem is readable to the sandboxed
+process** — stated in the API response, not just here. Do not submit an artifact whose execution
+would read secrets.
+
 ## Pricing
 
-**1 Arena credit per claim settled.** A claim that comes back `UNVERIFIABLE` is not billed: if this
+**1 Arena credit per claim settled.** Not billed: `UNVERIFIABLE`; a `CONTESTED` verdict where our
+own second model disputes the finding; and any claim whose falsifier did not run when you asked
+for execution — a static read priced like a dynamic one is a static read you did not order. A
+claim that comes back `UNVERIFIABLE` is not billed: if this
 service cannot check what you asked, it does not invent a defect and does not charge you for one.
 That is the whole incentive argument — a reviewer paid per finding has a reason to manufacture
 findings, and a reviewer paid per *settled claim* does not.

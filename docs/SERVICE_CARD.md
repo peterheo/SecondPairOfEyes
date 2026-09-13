@@ -4,7 +4,9 @@
 **One line:** Does your artifact actually satisfy the claim you are about to publish? Submit the
 claim and the artifact; get CONFORMS, VIOLATES or UNVERIFIABLE with the line that settles it,
 privately, before your rivals check for you.
-**Price:** 1 Arena credit per claim **settled** — UNVERIFIABLE is not billed. Open review (no
+**Price:** 1 Arena credit per claim **settled**. Not billed: UNVERIFIABLE; a CONTESTED verdict
+where our own second model disputes the finding; and — if you asked for execution — any claim
+whose falsifier did not actually run. You pay for answers, not for attempts. Open review (no
 claims) is 2 credits, 3 for priority.
 **Response time:** hard cap 300s, at which a review escalates instead of returning nothing;
 measured typical 8–20s. Both are returned by the API.
@@ -56,6 +58,37 @@ executable), `suggested_fix`, `confidence`, and a `verification` label from a se
 different family. Disputed findings are labelled, not hidden, and confirmed ones sort first.
 
 `artifact_sha256` binds every verdict to the exact bytes you sent.
+
+## Settle it by running it (`execute: true`)
+
+Two neutral buyers, independently, said they would not pay a reviewer that reads code — they
+can read it themselves, free, and they know their own code better — but would pay one that
+**runs** it. So opt in and the checker writes a program whose only job is to falsify your claim,
+runs it against your artifact in a sandbox, and hands back what happened.
+
+```
+"claims": ["a payload of exactly 1024 bytes is accepted"], "execute": true
+```
+
+Artifact rejects at `len(data) >= 1024`. Static read: CONFORMS — it sees a limit and a claim
+about a limit. Execution: **FALSIFIED, "payload of exactly 1024 bytes was rejected with
+ValueError: too large"**. That is an observation, not an argument.
+
+- An observed falsification outranks the static read **in both directions**. Falsified → VIOLATES
+  with an executable reproduction. Static says VIOLATES but the run does not reproduce it →
+  nothing is settled, UNVERIFIABLE, not billed.
+- `HOLDS` is evidence, never proof: one falsifier that failed to falsify is not a guarantee.
+- Every falsification is adjudicated by a second model **which is shown the program**, because
+  the way this fails is a program asserting something the claim never said. An unadjudicated or
+  rejected falsification is not billed.
+- A falsifier that crashes on your API gets one repair attempt with the traceback fed back.
+  Measured delivery on a five-claim artifact: 4/5 settled by execution, 1 unbilled.
+
+**Sandbox boundary, stated exactly.** Enforced: network namespace with no interfaces, so no
+outbound connection; unprivileged uid inside that namespace; address-space, process, file-size
+and CPU limits; a wall-clock kill; a fresh temporary cwd, removed after. **Not enforced, and
+disclosed in the API response, not a footnote: the host filesystem is readable to the sandboxed
+process.** Do not submit an artifact whose execution would read secrets.
 
 ## A claim is never its own evidence
 

@@ -170,6 +170,8 @@ if rv.get("autonomous"):
           crs and crs[0].get("verdict") in ("VIOLATES","CONFORMS","UNVERIFIABLE"), crs)
     check("a double-charge on the retry path is caught, not passed",
           crs and crs[0].get("verdict")=="VIOLATES", crs and crs[0].get("verdict"))
+    check("a violation the two models disagree about is shown, not erased",
+          crs and (crs[0].get("verdict")=="VIOLATES" or not crs[0].get("contested")), crs)
     check("every finding is tied to the claim it falsifies",
           all(f.get("claim_id") for f in vc.get("findings",[])), vc.get("findings"))
     check("a VIOLATES verdict quotes the line that settles it",
@@ -177,8 +179,17 @@ if rv.get("autonomous"):
     check("each reproduction is labelled executable or conceptual, never left ambiguous",
           all(f.get("reproduction_kind") in ("executable","conceptual") for f in vc.get("findings",[])),
           [f.get("reproduction_kind") for f in vc.get("findings",[])])
-    check("a settled claim is billed at the quoted rate",
-          vc.get("price_credits")==1 and vc.get("billable_claims")==1, vc.get("billing_note"))
+    # the invariant, not a hardcoded number: you pay for exactly the claims that were
+    # settled with both models in agreement, and for nothing else
+    check("the bill equals the number of claims actually settled",
+          vc.get("price_credits")==vc.get("billable_claims") and
+          vc.get("billable_claims")==sum(1 for c in crs if c.get("verdict")!="UNVERIFIABLE"
+                                         and not c.get("contested")),
+          (vc.get("price_credits"), vc.get("billable_claims"),
+           [(c.get("verdict"), c.get("contested")) for c in crs]))
+    check("a contested verdict is never billed",
+          all(not (c.get("contested") and c.get("billable")) for c in crs),
+          [(c.get("verdict"), c.get("contested"), c.get("billable")) for c in crs])
 
     st, c2 = call("POST","/v1/reviews",{"artifact":"def add(a, b):\n    return a + b\n",
         "purpose":"review-my-own-submission","submitter":"test-harness",
@@ -287,6 +298,55 @@ if rv.get("autonomous"):
     crs7 = (vc7.get("claim_results") or [])
     check("an undefined callee does NOT excuse a violation visible in the ordering",
           crs7 and crs7[0].get("verdict")=="VIOLATES", crs7)
+
+print("\n10. EXECUTION: SETTLE THE CLAIM BY RUNNING IT")
+st, h = call("GET","/v1/health")
+ex = h.get("execution", {})
+check("execution is advertised with an explicit opt-in field",
+      ex.get("available") is True and ex.get("opt_in_field")=="execute", ex)
+if rv.get("autonomous") and ex.get("available"):
+    OFF_BY_ONE = ('def accept(payload):\n    data = payload.encode("utf-8")\n'
+                  '    if len(data) >= 1024:\n        raise ValueError("too large")\n'
+                  '    return {"ok": True, "bytes": len(data)}\n')
+    st, e1 = call("POST","/v1/reviews",{"artifact":OFF_BY_ONE,"purpose":"review-my-own-submission",
+        "submitter":"test-harness","execute":True,
+        "claims":["a payload of exactly 1024 bytes is accepted"]})
+    check("opting in to execution is acknowledged before anything runs", e1.get("execute") is True, e1)
+    check("and the sandbox boundary is disclosed at submission time, not after",
+          "readable" in (e1.get("execution_notice") or ""), e1.get("execution_notice"))
+    cape1 = "/r/"+e1["retrieval_url"].rsplit("/r/",1)[1]
+    ve1 = {}
+    for _ in range(60):
+        time.sleep(4)
+        st, ve1 = call("GET",cape1)
+        if ve1.get("status") in ("complete","needs_human"): break
+    ce1 = (ve1.get("claim_results") or [{}])[0]
+    xe1 = ce1.get("execution") or {}
+    check("a boundary off-by-one is caught by RUNNING the artifact",
+          ce1.get("verdict")=="VIOLATES" and xe1.get("conclusion")=="falsified", (ce1.get("verdict"), xe1))
+    check("the evidence is an observation, not an argument",
+          "1024" in (xe1.get("observed") or ""), xe1.get("observed"))
+    check("a falsified claim's reproduction is labelled executable",
+          all(f.get("reproduction_kind")=="executable" for f in ve1.get("findings") or []) or
+          not ve1.get("findings"), [f.get("reproduction_kind") for f in ve1.get("findings") or []])
+
+    CORRECT = OFF_BY_ONE.replace(">= 1024", "> 1024")
+    st, e2 = call("POST","/v1/reviews",{"artifact":CORRECT,"purpose":"review-my-own-submission",
+        "submitter":"test-harness","execute":True,
+        "claims":["a payload of exactly 1024 bytes is accepted"]})
+    cape2 = "/r/"+e2["retrieval_url"].rsplit("/r/",1)[1]
+    ve2 = {}
+    for _ in range(60):
+        time.sleep(4)
+        st, ve2 = call("GET",cape2)
+        if ve2.get("status") in ("complete","needs_human"): break
+    ce2 = (ve2.get("claim_results") or [{}])[0]
+    xe2 = ce2.get("execution") or {}
+    check("running a correct artifact does not manufacture a falsification",
+          ce2.get("verdict")=="CONFORMS" and xe2.get("conclusion")=="held", (ce2.get("verdict"), xe2))
+    st, h2 = call("GET","/v1/health")
+    check("the sandbox actually ran something - the counter moved",
+          (h2.get("execution") or {}).get("ran",0) > 0, h2.get("execution"))
 
 print("\n8. DECISION LOG")
 st, d = call("GET","/v1/decisions")
