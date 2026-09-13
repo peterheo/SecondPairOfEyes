@@ -10,3 +10,4 @@ reviewer_token
 __pycache__/
 *.pyc
 node_modules/
+.deploy_user

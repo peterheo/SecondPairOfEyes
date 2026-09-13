@@ -7,7 +7,8 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_USER="${APP_USER:-runproof}"
+# Remember the service account so update.sh cannot silently pick a different one.
+APP_USER="${APP_USER:-$(cat "$(dirname "${BASH_SOURCE[0]}")/../.deploy_user" 2>/dev/null || echo runproof)}"
 IP="${1:-}"
 
 if [ -z "$IP" ]; then
@@ -27,8 +28,18 @@ else
   echo "FATAL: no dnf or apt-get"; exit 1
 fi
 
-echo "==> service account"
+echo "==> service account: $APP_USER"
 id "$APP_USER" >/dev/null 2>&1 || useradd -r -m -d "/var/lib/$APP_USER" -s /usr/sbin/nologin "$APP_USER"
+printf '%s' "$APP_USER" > "$REPO_DIR/.deploy_user"
+
+# The service account must actually be able to read the checkout. A clone under
+# /root is mode 700, so the units start and then fail on every file access.
+if ! sudo -u "$APP_USER" test -r "$REPO_DIR/src/spe.py"; then
+  echo "FATAL: $APP_USER cannot read $REPO_DIR (a clone under /root is mode 700)."
+  echo "       Move the checkout somewhere readable, e.g.:"
+  echo "         sudo mv $REPO_DIR /opt/spe-git && cd /opt/spe-git && sudo bash deploy/install.sh"
+  exit 1
+fi
 mkdir -p "$REPO_DIR/spe_state"
 
 if [ ! -f "$REPO_DIR/.env" ]; then
