@@ -1413,6 +1413,74 @@ class H(BaseHTTPRequestHandler):
                                                  "stranded_recovered": REVIEW_STATS["stranded_recovered"],
                                                  "last_error": REVIEW_STATS["last_error"]},
                                     "payment_notice": PAYMENT_NOTICE})
+        if path == "/v1/card":
+            # One machine-readable card, so a buying agent never has to parse prose or take a
+            # seller's README on trust. Every number here is measured or enforced in code.
+            k = kernel_authorize("healthcheck", ALLOWED_PURPOSE, ALLOWED_PURPOSE, "healthcheck", "")
+            return self._send(200, {
+                "name": "Second Pair of Eyes - Claim Check",
+                "schema_version": SCHEMA_VERSION,
+                "headline": "Before you publish a capability claim, check whether the artifact "
+                            "you are shipping actually supports it.",
+                "trigger": "a drafted or revised claim plus an unpublished artifact, immediately "
+                           "before you publish",
+                "request": {"method": "POST", "path": "/v1/reviews",
+                            "body": {"artifact": "<your own work, <=%d bytes of text>" % MAX_ARTIFACT,
+                                     "claims": ["<a falsifiable claim>", "... up to %d" % MAX_CLAIMS],
+                                     "purpose": ALLOWED_PURPOSE,
+                                     "submitter": "<your agent id>",
+                                     "execute": "true to settle claims by running the artifact"}},
+                "poll": {"how": "GET the retrieval_url returned at submission",
+                         "interval_seconds": 3,
+                         "always": "200 with status in queued|reviewing|complete|needs_human"},
+                "verdicts": {v: d for v, d in (
+                    ("VIOLATES", "a counterexample quoted from your artifact, findings attached"),
+                    ("CONFORMS", "the artifact satisfies the claim as written, with the line that "
+                                 "does the work quoted"),
+                    ("UNVERIFIABLE", "the claim names no test that could fail, needs code you did "
+                                     "not send, or the artifact only restates it"))},
+                "price": {"per_settled_claim": PRICE_CLAIM,
+                          "quoted_at_submission": "a maximum, not the amount charged",
+                          "never_billed": [
+                              "UNVERIFIABLE",
+                              "CONTESTED - our own second model disputes the finding",
+                              "execution requested and the falsifier did not run",
+                              "an artifact the sandbox cannot run"],
+                          "open_review_without_claims": PRICE_REVIEW,
+                          "first_check_free": False},
+                "latency_seconds": {"static_typical": [8, 20], "execution_typical": [40, 90],
+                                    "hard_cap": TARGET_SECONDS,
+                                    "note": "the cap is when a review escalates rather than "
+                                            "returning nothing; the ranges are measured"},
+                "execution": {"available": EXEC_ENABLED, "opt_in": "execute",
+                              "runs": "Python artifacts only; anything else is checked statically "
+                                      "and not billed",
+                              "sandbox": SANDBOX_KIND,
+                              "network_blocked_verified": SANDBOX_VERIFIED,
+                              "limitation": "the host filesystem is readable to the sandboxed "
+                                            "process - do not submit an artifact whose execution "
+                                            "would read secrets",
+                              "delivery_rate_note": "the falsifier fails to produce a program on "
+                                                    "roughly one claim in four or five; those are "
+                                                    "not billed"},
+                "privacy": {"artifact_posted_to_room": False,
+                            "findings_served_at": "a single unguessable capability URL",
+                            "retention_seconds": RETENTION_SECONDS,
+                            "delete": "DELETE the retrieval_url to destroy artifact and findings"},
+                "refuses": ["reviewing work the request says belongs to someone else",
+                            "sending findings to anyone but the submitter",
+                            "any purpose other than %r" % ALLOWED_PURPOSE],
+                "does_not_provide": [
+                    "attestation, certification, or signed provenance",
+                    "verification of ownership - submitter and subject are SELF-DECLARED labels; "
+                    "the kernel enforces consistency between them, not the truth of them, and "
+                    "cannot tell whether the caller wrote the artifact",
+                    "non-repudiation",
+                    "a guarantee that the models are right"],
+                "sharedos": {"namespace": NAMESPACE, "kernel_in_decision_path": bool(k),
+                             "audit_enabled": AUDIT_STATS["enabled"]},
+                "payment": PAYMENT_NOTICE,
+                "source": "https://github.com/peterheo/SecondPairOfEyes"})
         if path == "/v1/decisions":
             with LOCK: return self._send(200, {"items": DECISIONS[-200:]})
         if path == "/v1/reviews/pending":

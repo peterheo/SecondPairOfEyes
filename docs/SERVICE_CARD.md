@@ -127,8 +127,13 @@ the signature check is still VIOLATES.
 
 ## What it is not
 
-Not an attestation, certification, proof, or verification of ownership. `submitter` is a
-self-declared label the kernel checks for consistency and records; it is not authentication. The
+Not an attestation, certification, proof, or verification of ownership, and **not a guarantee that
+only the author can submit your work**. `submitter` and `subject_of_review` are labels the caller
+supplies. The kernel enforces consistency between them and refuses a request that *says* it is about
+someone else's work, which stops confused-deputy use and accidental misuse and puts every request on
+the record — but it is not authentication, and it cannot tell whether the person typing a name wrote
+the artifact. Designed for checking your own unpublished work; identity and ownership are
+self-declared in this version. Authenticated ownership is roadmap. The
 report is advisory, the models are fallible, and a verdict is about the claim as written.
 
 ## What it refuses

@@ -486,6 +486,33 @@ for _ret in ((True, {"input":{"n":1}}, {"why":"obj"}), (False, "", {"why":{"k":"
 check("a verifier returning the wrong TYPE cannot kill a reviewer thread", _ok,
       "one of dict/list/None in place of a promised string raised")
 
+print("\n12. THE MACHINE-READABLE CARD MATCHES THE CODE")
+st, card = call("GET","/v1/card")
+check("a buying agent can read the card without parsing prose", st==200 and card.get("name"), st)
+check("the card's price matches what the service actually charges",
+      card["price"]["per_settled_claim"]==1, card.get("price"))
+check("every non-billing rule the service enforces is on the card",
+      len(card["price"]["never_billed"])>=4, card["price"]["never_billed"])
+check("the card does not offer a first check free - voluntary payment must be measurable",
+      card["price"]["first_check_free"] is False, card["price"])
+check("the card states the sandbox actually in force, not an aspiration",
+      card["execution"]["sandbox"]==(h.get("execution") or {}).get("sandbox"),
+      (card["execution"]["sandbox"], (h.get("execution") or {}).get("sandbox")))
+check("the card admits execution does not always deliver",
+      "one claim in four" in card["execution"]["delivery_rate_note"], card["execution"])
+check("the card names the sandbox limitation rather than burying it",
+      "host filesystem is readable" in card["execution"]["limitation"], card["execution"])
+# The correction Codex made at room seq 35: the kernel enforces label consistency, not
+# authorship, and a card that implies otherwise is the exact defect this service sells against.
+check("the card refuses to imply it can establish who wrote the artifact",
+      any("SELF-DECLARED" in x for x in card["does_not_provide"]), card["does_not_provide"])
+check("and it does not claim attestation or non-repudiation",
+      any("attestation" in x for x in card["does_not_provide"])
+      and any("non-repudiation" in x for x in card["does_not_provide"]), card["does_not_provide"])
+check("both latency ranges are published, not just the flattering one",
+      card["latency_seconds"]["static_typical"] and card["latency_seconds"]["execution_typical"],
+      card["latency_seconds"])
+
 print("\n8. DECISION LOG")
 st, d = call("GET","/v1/decisions")
 kinds = [(e["decision"]) for e in d["items"]]

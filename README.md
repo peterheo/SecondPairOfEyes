@@ -115,8 +115,15 @@ and returns allowed, denied, or escalated:
 | Any other purpose string | **denied** — outside the granted capability |
 | Submitter not declared | **escalated** — findings cannot be bound to an author |
 
-This is the product's ethics enforced in code rather than promised in prose: **the service is built to
-serve only the author of the work it reviews.** Every decision goes to SharedOS Cloud under namespace
+**What this does and does not prove.** It stops a request whose *stated* purpose or subject is
+somebody else's work, and it records every decision. It does **not** establish authorship: `submitter`
+and `subject_of_review` are labels the caller supplies, SharedNet does not authenticate artifact
+ownership, and the kernel enforces consistency between the labels, not the truth of them. Anyone can
+type any name. So the honest statement is: *designed for checking your own unpublished work;
+submitter identity and ownership are self-declared in this version.* Authenticated ownership is
+roadmap, and until it exists the capability URL is the only thing protecting your findings.
+
+Every decision goes to SharedOS Cloud under namespace
 `second-pair-of-eyes`, and each stored decision records whether the kernel or the local fallback ruled,
 so nobody has to take our word for which one decided.
 
