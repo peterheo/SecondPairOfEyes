@@ -1,0 +1,12 @@
+# secrets live in .env on the host, never in the repo
+.env
+.env.local
+spe_state/
+*.key
+*_key
+nim_key
+sharedos_key
+reviewer_token
+__pycache__/
+*.pyc
+node_modules/
