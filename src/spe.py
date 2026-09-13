@@ -437,8 +437,14 @@ def call_reviewer(artifact, notes, model=None, timeout=75):
     msg = d["choices"][0]["message"]
     return extract_json(msg.get("content") or msg.get("reasoning_content") or "")
 
-VERIFY_PROMPT = """A reviewer says the artifact below contains a defect. Decide independently \
-whether the artifact really does what the finding says it does.
+VERIFY_PROMPT = """The author of this artifact published a claim about it, and a reviewer says \
+the artifact does not live up to it. Decide independently whether that is true.
+
+THE AUTHOR'S CLAIM: %s
+
+The claim is the requirement. It does not have to appear anywhere in the artifact - the author \
+is about to publish it, which is the whole reason it is being checked. "No such requirement is \
+stated in the code" is never a reason to dispute a finding.
 
 Both errors are expensive and neither is the safe answer. Confirming a wrong finding sends the \
 author to rewrite code that works. Disputing a right one sends them to publish a defect they had \
@@ -470,13 +476,14 @@ type check, missing logging or missing tests is not a defect unless the artifact
 VERIFY_MODEL = (os.environ.get("VERIFY_MODEL", "").strip()
                 or (REVIEW_FALLBACKS[0] if REVIEW_FALLBACKS else REVIEW_MODEL))
 
-def verify_finding(artifact, finding, wrote_it=None, timeout=45):
+def verify_finding(artifact, finding, wrote_it=None, timeout=45, claim=None):
     """Second opinion on a single finding, from a different model. Unconfirmed findings are dropped."""
     art = artifact[:MAX_ARTIFACT_CHARS]
     model = VERIFY_MODEL if VERIFY_MODEL != (wrote_it or REVIEW_MODEL) else (
         REVIEW_FALLBACKS[-1] if REVIEW_FALLBACKS else REVIEW_MODEL)
     payload = {"model": model,
                "messages": [{"role": "user", "content": VERIFY_PROMPT % (
+                   claim or "(the author did not state one; judge the finding on its own)",
                    finding["severity"], finding["evidence"], finding["reproduction"], art)}],
                "temperature": 0.0, "max_tokens": 400,
                "response_format": {"type": "json_object"}}
@@ -511,11 +518,11 @@ def validate_findings(raw):
         out.append(item)
     return out
 
-def verify_all(artifact, findings, wrote_it):
+def verify_all(artifact, findings, wrote_it, claim=None):
     """Re-check each finding with a different model. Never drops; labels instead."""
     for f in findings:
         try:
-            ok, failing_input, why = verify_finding(artifact, f, wrote_it)
+            ok, failing_input, why = verify_finding(artifact, f, wrote_it, claim=claim)
         except Exception:
             ok, failing_input, why = None, "", ""
         if ok is None:
@@ -547,6 +554,15 @@ def run_claims(job):
     for idx, claim in enumerate(job["claims"], 1):
         verdict = reason = None
         used = None
+        # Declared here, above everything that sets them. These three were initialised
+        # further down, AFTER the verification block that sets contested - so contested was
+        # reset to False on every claim while the reason still read "CONTESTED:", and the
+        # buyer was charged for a verdict the service itself said was disputed. Codex found
+        # it by probing the deployed service; verdict, contested, billable and price_credits
+        # must agree or the billing rule is a sentence rather than a mechanism.
+        contested = False
+        exec_failed = False
+        execution = None
         for model, timeout in attempts:
             try:
                 verdict, reason, findings, evidence, falsifiable = call_claim(
@@ -563,7 +579,7 @@ def run_claims(job):
         if findings:
             for f in findings:
                 f["claim_id"] = "C%d" % idx
-            verify_all(job["artifact"], findings, used)
+            verify_all(job["artifact"], findings, used, claim)
             all_findings += findings
             # If the second model disputed every finding behind a VIOLATES, the two models
             # disagree and nothing is settled. Reporting it as a violation AND billing for it
@@ -583,9 +599,6 @@ def run_claims(job):
                           "behind it. Shown because a disputed finding has been right before; "
                           "not charged because the two models do not agree. " % (used, VERIFY_MODEL)
                           + reason)[:400]
-        contested = False
-        exec_failed = False
-        execution = None
         if job.get("execute") and not falsifiable:
             # There is nothing to falsify. Writing a program to break an unfalsifiable claim
             # is how you manufacture a defect: under load, "this module is secure and follows

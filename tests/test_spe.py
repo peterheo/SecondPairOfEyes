@@ -305,6 +305,51 @@ if rv.get("autonomous"):
     check("an undefined callee does NOT excuse a violation visible in the ordering",
           crs7 and crs7[0].get("verdict")=="VIOLATES", crs7)
 
+print("\n9b. THE THREE TESTS CODEX ASKED TO LOCK BEFORE LAUNCH (room seq 31)")
+if rv.get("autonomous"):
+    # (1) the requirement exists ONLY in the claim field. The deployed verifier disputed a
+    # true finding here with "no such requirement is stated in the artifact" - it had never
+    # been shown the claim, so it was judging the code in a vacuum.
+    st, k1 = call("POST","/v1/reviews",{"artifact":
+        'def handle(req):\n    if req.get("internal"):\n        return process(req)\n'
+        '    if not req.get("token"):\n        return {"status": 401}\n    return process(req)\n',
+        "purpose":"review-my-own-submission","submitter":"test-harness",
+        "claims":["the handler rejects every request that is not authenticated"]})
+    capk1 = "/r/"+k1["retrieval_url"].rsplit("/r/",1)[1]
+    vk1 = {}
+    for _ in range(60):
+        time.sleep(4)
+        st, vk1 = call("GET",capk1)
+        if vk1.get("status") in ("complete","needs_human"): break
+    ck1 = (vk1.get("claim_results") or [{}])[0]
+    check("a requirement that exists only in the claim is still a requirement",
+          ck1.get("verdict")=="VIOLATES", ck1.get("verdict"))
+    check("and the verifier does not dispute it for being absent from the code",
+          all("no such requirement" not in (f.get("verification") or "").lower()
+              for f in vk1.get("findings") or []),
+          [f.get("verification") for f in vk1.get("findings") or []])
+
+    # (3) verdict, contested, billable and price_credits must agree on every claim, always.
+    # They did not: contested was set by the verification block and then reset to False one
+    # line below it, so the reason read CONTESTED while the buyer was charged.
+    def _consistent(view):
+        rs = view.get("claim_results") or []
+        if not rs: return False
+        if view.get("billable_claims") != sum(1 for c in rs if c.get("billable")): return False
+        if view.get("price_credits") != view.get("billable_claims"): return False
+        for c in rs:
+            if c.get("contested") and c.get("billable"): return False
+            if c.get("verdict")=="UNVERIFIABLE" and c.get("billable"): return False
+            if c.get("execution_requested_not_delivered") and c.get("billable"): return False
+            if ("CONTESTED" in (c.get("reason") or "")) != bool(c.get("contested")): return False
+        return True
+    check("verdict, contested, billable and the bill agree on every claim",
+          _consistent(vk1), [(c.get("verdict"), c.get("contested"), c.get("billable"))
+                             for c in vk1.get("claim_results") or []])
+    check("the same holds for the claim-mode views checked earlier",
+          all(_consistent(v) for v in (vc, vc2, vc3, vc4, vc5) if v.get("status")=="complete"),
+          "see section 9")
+
 print("\n10. EXECUTION: SETTLE THE CLAIM BY RUNNING IT")
 st, h = call("GET","/v1/health")
 ex = h.get("execution", {})
@@ -380,6 +425,14 @@ if rv.get("autonomous") and ex.get("available"):
     check("running a correct artifact does not manufacture a falsification",
           ce2.get("verdict")=="CONFORMS" and xe2.get("conclusion")=="held", (ce2.get("verdict"), xe2))
     st, h2 = call("GET","/v1/health")
+    # (3, end to end) if execution was asked for and no falsifier ran, the charge is zero.
+    check("an execution that was requested and not delivered is never billed",
+          all(not c.get("billable") for v in (ve1, ve2, ve3)
+              for c in (v.get("claim_results") or [])
+              if c.get("execution_requested_not_delivered")),
+          [(c.get("claim_id"), c.get("billable")) for v in (ve1, ve2, ve3)
+           for c in (v.get("claim_results") or []) if c.get("execution_requested_not_delivered")]
+          or "no undelivered executions in this run")
     check("the sandbox actually ran something - the counter moved",
           (h2.get("execution") or {}).get("ran",0) > 0, h2.get("execution"))
 
