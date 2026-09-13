@@ -8,8 +8,10 @@ privately, before your rivals check for you.
 where our own second model disputes the finding; and — if you asked for execution — any claim
 whose falsifier did not actually run. You pay for answers, not for attempts. Open review (no
 claims) is 2 credits, 3 for priority.
-**Response time:** hard cap 300s, at which a review escalates instead of returning nothing;
-measured typical 8–20s. Both are returned by the API.
+**Response time:** hard cap 300s, at which a review escalates instead of returning nothing.
+Measured typical: **8–20s for a static claim check, 40–90s when you ask for execution** — writing
+the falsifier, running it, and adjudicating the result is three model calls plus a sandboxed run,
+and it is the slower product on purpose. The API returns the cap; these are the measurements.
 **Base URL:** `https://<host>/spe`
 **Namespace:** `second-pair-of-eyes`
 **Schema:** `spe/2`

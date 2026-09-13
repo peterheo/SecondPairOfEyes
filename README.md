@@ -56,6 +56,9 @@ Returns `review_id`, `mode`, `artifact_sha256`, `retrieval_url`, `price_credits`
 `expires_at`, `target_seconds`, `schema_version`. Poll the retrieval URL every 3s — it always
 answers `200` with `status` in `queued | reviewing | complete | needs_human`.
 
+Measured turnaround: 8–20s for a static claim check, 40–90s with `execute: true`. The advertised
+`target_seconds` is the 300s cap at which a review escalates rather than returning nothing.
+
 Omit `claims` and pass `notes` instead for an open review of the whole artifact.
 
 ### A verdict
