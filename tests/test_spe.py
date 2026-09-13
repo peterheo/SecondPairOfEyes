@@ -347,6 +347,25 @@ if rv.get("autonomous") and ex.get("available"):
           not ve1.get("findings"), [f.get("reproduction_kind") for f in ve1.get("findings") or []])
 
     CORRECT = OFF_BY_ONE.replace(">= 1024", "> 1024")
+    # Execution overrides the static read, so it can walk a closed failure back in: a vague
+    # claim with execute:true had a falsifier written for it, which invented a test, reported
+    # FALSIFIED, and billed. There is nothing to falsify in an unfalsifiable claim.
+    st, e3 = call("POST","/v1/reviews",{"artifact":"def add(a, b):\n    return a + b\n",
+        "purpose":"review-my-own-submission","submitter":"test-harness","execute":True,
+        "claims":["this module is secure and follows best practices"]})
+    cape3 = "/r/"+e3["retrieval_url"].rsplit("/r/",1)[1]
+    ve3 = {}
+    for _ in range(60):
+        time.sleep(4)
+        st, ve3 = call("GET",cape3)
+        if ve3.get("status") in ("complete","needs_human"): break
+    ce3 = (ve3.get("claim_results") or [{}])[0]
+    check("an unfalsifiable claim is never RUN against anything",
+          (ce3.get("execution") or {}).get("conclusion")=="not_run", ce3.get("execution"))
+    check("and execution cannot turn a vague claim into a billed violation",
+          ce3.get("verdict")=="UNVERIFIABLE" and ve3.get("price_credits")==0,
+          (ce3.get("verdict"), ve3.get("price_credits")))
+
     st, e2 = call("POST","/v1/reviews",{"artifact":CORRECT,"purpose":"review-my-own-submission",
         "submitter":"test-harness","execute":True,
         "claims":["a payload of exactly 1024 bytes is accepted"]})

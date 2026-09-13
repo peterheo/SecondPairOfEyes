@@ -251,6 +251,8 @@ STEP 3 - Read the claim the way a competent engineer would, then look for a coun
 Return STRICT JSON only:
 {"claim_verdict":"VIOLATES|CONFORMS|UNVERIFIABLE",
  "verdict_reason":"one sentence; for UNVERIFIABLE, what would make the claim checkable",
+ "claim_falsifiable":true|false,   // false when STEP 1 applies: the claim names no test that
+                                   // could fail. Vague claims are not run against anything.
  "pass_depends_on":"if your answer relies on what some function, method or module DOES, and its
    body is not in the artifact, name it here - just the name. sanitize, validate, verify_x,
    audit_write and put_raw are names, not behaviour, and you have not seen what they do. Leave
@@ -377,6 +379,8 @@ def call_claim(artifact, claim, model=None, timeout=75):
         raise RuntimeError("model returned no usable verdict")
     reason = str(out.get("verdict_reason", ""))[:400]
     evidence = str(out.get("verdict_evidence", ""))[:600]
+    falsifiable = out.get("claim_falsifiable")
+    falsifiable = True if falsifiable is None else bool(falsifiable)
     depends = re.sub(r"[^A-Za-z0-9_.]", "", str(out.get("pass_depends_on", "") or ""))[:60]
     if depends and depends.lower() not in ("none", "null", "na", "n/a", "empty"):
         # The model has just told us its answer rests on a function it never saw. Asking it to
@@ -409,7 +413,7 @@ def call_claim(artifact, claim, model=None, timeout=75):
         verdict = "UNVERIFIABLE"
         reason = ("the checker asserted a violation but produced no evidence quoted from the "
                   "artifact; treat the claim as unchecked. " + reason)[:400]
-    return verdict, reason, findings, evidence
+    return verdict, reason, findings, evidence, falsifiable
 
 
 def call_reviewer(artifact, notes, model=None, timeout=75):
@@ -545,7 +549,7 @@ def run_claims(job):
         used = None
         for model, timeout in attempts:
             try:
-                verdict, reason, findings, evidence = call_claim(
+                verdict, reason, findings, evidence, falsifiable = call_claim(
                     job["artifact"], claim, model, timeout)
                 used = model
                 break
@@ -582,7 +586,16 @@ def run_claims(job):
         contested = False
         exec_failed = False
         execution = None
-        if job.get("execute") and EXEC_ENABLED and REVIEW_API_KEY:
+        if job.get("execute") and not falsifiable:
+            # There is nothing to falsify. Writing a program to break an unfalsifiable claim
+            # is how you manufacture a defect: under load, "this module is secure and follows
+            # best practices" against `return a + b` came back VIOLATES, settled by execution,
+            # and BILLED - the vague-claim failure I had closed statically, walking back in
+            # through the execution path because execution overrides the static read.
+            execution = {"ran": False, "conclusion": "not_run",
+                         "observed": "the claim names no test that could fail, so there is "
+                                     "nothing to run against it"}
+        elif job.get("execute") and EXEC_ENABLED and REVIEW_API_KEY:
             try:
                 prog = what = None
                 # the free primary rate-limits under concurrent load, and an execution that
@@ -659,7 +672,9 @@ def run_claims(job):
             except Exception as e:
                 EXEC_STATS["errors"] += 1
                 execution = {"ran": False, "conclusion": "error", "observed": str(e)[:200]}
-            if not execution or execution.get("conclusion") in ("error", "inconclusive"):
+            if execution and execution.get("conclusion") == "not_run":
+                pass                       # unfalsifiable: UNVERIFIABLE stands, and it is free
+            elif not execution or execution.get("conclusion") in ("error", "inconclusive"):
                 # You paid for a run and did not get one. The static read still ships, because
                 # it is worth more than nothing, but it is not what you bought and you are not
                 # charged for it.
