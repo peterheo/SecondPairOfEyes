@@ -65,6 +65,14 @@ it, and you are not billed. Send the handler instead. A comment asserting confor
 overrides the code beneath it: if the code violates the claim, the verdict is VIOLATES no matter
 what the comment says.
 
+## A name is not a behaviour
+
+If settling your claim depends on what `sanitize()`, `validate()` or `audit_write()` actually
+does, and you did not send that function, the answer is **UNVERIFIABLE** naming the symbol — not
+a guess from the name. Send the callee and ask again. This does not become an excuse to abstain:
+order and reachability are visible even when the callee is not, so an append that happens *before*
+the signature check is still VIOLATES.
+
 ## What it is not
 
 Not an attestation, certification, proof, or verification of ownership. `submitter` is a

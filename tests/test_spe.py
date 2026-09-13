@@ -252,6 +252,42 @@ if rv.get("autonomous"):
     check("a comment asserting conformance never overrides the code beneath it",
           crs5 and crs5[0].get("verdict")=="VIOLATES", crs5)
 
+    # A helper's name is not its behaviour. The dangerous version of this is a claim that
+    # turns on a callee the buyer did not send, where a confident guess reads as a check.
+    st, c6 = call("POST","/v1/reviews",{"artifact":
+        'def search(term):\n    clean = sanitize(term)\n'
+        '    return db.execute("SELECT * FROM items WHERE name = " + clean)\n',
+        "purpose":"review-my-own-submission","submitter":"test-harness",
+        "claims":["user input is sanitized before it reaches the query"]})
+    capc6 = "/r/"+c6["retrieval_url"].rsplit("/r/",1)[1]
+    vc6 = {}
+    for _ in range(45):
+        time.sleep(4)
+        st, vc6 = call("GET",capc6)
+        if vc6.get("status") in ("complete","needs_human"): break
+    crs6 = (vc6.get("claim_results") or [])
+    check("a claim that turns on a callee we were not given is UNVERIFIABLE, not guessed",
+          crs6 and crs6[0].get("verdict")=="UNVERIFIABLE", crs6)
+    check("and the missing symbol is named so the buyer knows what to send",
+          crs6 and "sanitize" in (crs6[0].get("reason") or ""), crs6 and crs6[0].get("reason"))
+
+    # ... but order and reachability are visible even when the callee is not. This is the
+    # check that stops the guard above from turning into blanket abstention.
+    st, c7 = call("POST","/v1/reviews",{"artifact":
+        'def commit(msg):\n    ledger.append(msg)\n    if not verify_signature(msg):\n'
+        '        return False\n    return True\n',
+        "purpose":"review-my-own-submission","submitter":"test-harness",
+        "claims":["no message is written to the ledger unless the signature verifies"]})
+    capc7 = "/r/"+c7["retrieval_url"].rsplit("/r/",1)[1]
+    vc7 = {}
+    for _ in range(45):
+        time.sleep(4)
+        st, vc7 = call("GET",capc7)
+        if vc7.get("status") in ("complete","needs_human"): break
+    crs7 = (vc7.get("claim_results") or [])
+    check("an undefined callee does NOT excuse a violation visible in the ordering",
+          crs7 and crs7[0].get("verdict")=="VIOLATES", crs7)
+
 print("\n8. DECISION LOG")
 st, d = call("GET","/v1/decisions")
 kinds = [(e["decision"]) for e in d["items"]]

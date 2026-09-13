@@ -185,6 +185,18 @@ STEP 2 - Can you settle it from what you were given?
   -> If the claim is about code, data or behaviour that is NOT in the artifact, verdict
      UNVERIFIABLE. Name the missing piece. Do NOT guess.
 
+STEP 2a - Does settling the claim depend on something called but not defined here?
+If the claim turns on what a function, method or module does, and that thing is called in the
+artifact but its body is not in the artifact, you cannot settle the claim. This holds whether or
+not there is an import line: a bare call to a name defined nowhere in the text you were given is
+the same gap as an explicit import.
+  -> verdict UNVERIFIABLE, naming the symbol whose behaviour you would need. Do NOT assume a
+     helper does what its name suggests. `validate()`, `sanitize()`, `audit_write()` and
+     `verify_signature()` are names, not behaviour.
+  -> This does not apply when the claim can be settled from the artifact's own control flow
+     regardless of what the callee does - for example when the call happens after the write, or
+     is skipped on a path. Order and reachability are visible even when the callee is not.
+
 STEP 2b - Does the artifact IMPLEMENT the claim, or merely ASSERT it?
 A claim is never its own evidence. Documentation, a service card, a README, prose, or a comment
 that states the behaviour is true is NOT evidence that the behaviour is true. "Limits: requests up
@@ -199,6 +211,12 @@ again, in the artifact's own voice.
 STEP 3 - Read the claim the way a competent engineer would, then look for a counterexample.
   -> Found one you can quote from the artifact: verdict VIOLATES, with the counterexample.
   -> Looked and found none: verdict CONFORMS.
+  Judge the claim AS WRITTEN. A real defect that does not falsify THIS claim is not a violation
+  of it. If the claim is "input is sanitized before it reaches the query" and the artifact calls
+  sanitize() before building the query, the ordering conforms; whether concatenation is a good
+  idea is a different claim and you were not asked it. Importing an unstated
+  standard - best practice, a style rule, what you would have written - to rule VIOLATES is the
+  same mistake as inventing a defect for a vague claim.
   Do NOT return UNVERIFIABLE merely because the claim omits detail a pedant could ask for.
   Unstated argument types, unstated limits, and unhandled exotic inputs are NOT reasons to
   refuse a verdict when the ordinary reading is clear. If the claim holds on that ordinary
@@ -238,6 +256,11 @@ Worked examples of the verdict line only:
     -> UNVERIFIABLE  (the artifact restates the claim; it does not implement it)
   claim "the API key is never logged", artifact logs the key under a comment saying it does not
     -> VIOLATES  (the code rules, never the comment)
+  claim "every write goes through the audit hook", artifact calls put_raw() defined elsewhere
+    -> UNVERIFIABLE  (name put_raw; its name is not its behaviour)
+  claim "no message is written unless the signature verifies", artifact appends, THEN calls
+  verify_signature() defined elsewhere
+    -> VIOLATES  (the order is visible here even though the callee is not)
 """
 
 REVIEW_PROMPT = """You are an independent reviewer. Review ONLY the artifact below, which its author \
