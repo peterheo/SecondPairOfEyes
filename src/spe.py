@@ -969,10 +969,25 @@ def run_sandboxed(artifact, program, timeout=None):
             EXEC_STATS["errors"] += 1
             return "inconclusive", "the falsifier did not finish inside %ds" % timeout, ""
         lines = [l.strip() for l in out.splitlines() if l.strip()]
-        verdict_line = ""
+        # The line must BE a verdict, not merely contain one. A program that prints a summary
+        # mentioning all three outcomes produced a line reading
+        # "FALSIFIED: ... | HOLDS: 11th call correctly blocked | INCONCLUSIVE:", which parsed
+        # as a violation and was billed - a false VIOLATES manufactured by my own parser.
+        TOKENS = ("FALSIFIED", "HOLDS", "INCONCLUSIVE")
+        verdict_line, ambiguous = "", False
         for l in reversed(lines):
-            if l.upper().startswith(("FALSIFIED:", "HOLDS:", "INCONCLUSIVE:")):
-                verdict_line = l; break
+            up = l.upper()
+            if not up.startswith(tuple(t + ":" for t in TOKENS)):
+                continue
+            rest = up.split(":", 1)[1]
+            if sum(1 for t in TOKENS if t + ":" in rest):
+                ambiguous = True          # more than one outcome on one line: trust none of them
+                continue
+            verdict_line = l; break
+        if ambiguous and not verdict_line:
+            EXEC_STATS["inconclusive"] += 1
+            return "inconclusive", ("the falsifier printed more than one outcome on a line, so "
+                                    "no single verdict can be read from its output"), (out[-600:]).strip()
         tail = (out[-800:] + ("\n[stderr] " + err[-400:] if err.strip() else "")).strip()
         if not verdict_line:
             EXEC_STATS["errors"] += 1
