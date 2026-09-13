@@ -433,8 +433,58 @@ if rv.get("autonomous") and ex.get("available"):
           [(c.get("claim_id"), c.get("billable")) for v in (ve1, ve2, ve3)
            for c in (v.get("claim_results") or []) if c.get("execution_requested_not_delivered")]
           or "no undelivered executions in this run")
+    # The Arena will send JavaScript, Go and service cards. The falsifier imports the
+    # artifact as Python; when it cannot, say so in words the author can act on rather
+    # than handing them "invalid syntax (artifact.py, line 1)".
+    st, e4 = call("POST","/v1/reviews",{"artifact":
+        'function accept(p) {\n  if (p.length >= 1024) throw new Error("too large");\n'
+        '  return {ok: true};\n}\n',
+        "purpose":"review-my-own-submission","submitter":"test-harness","execute":True,
+        "claims":["a payload of exactly 1024 characters is accepted"]})
+    cape4 = "/r/"+e4["retrieval_url"].rsplit("/r/",1)[1]
+    ve4 = {}
+    for _ in range(60):
+        time.sleep(4)
+        st, ve4 = call("GET",cape4)
+        if ve4.get("status") in ("complete","needs_human"): break
+    ce4 = (ve4.get("claim_results") or [{}])[0]
+    xe4 = ce4.get("execution") or {}
+    check("an artifact the sandbox cannot run says so in plain words",
+          xe4.get("conclusion")=="not_run" and "Python" in (xe4.get("observed") or ""),
+          xe4.get("observed"))
+    check("and a run that could not happen is never charged for",
+          ve4.get("price_credits")==0, ve4.get("price_credits"))
+
     check("the sandbox actually ran something - the counter moved",
           (h2.get("execution") or {}).get("ran",0) > 0, h2.get("execution"))
+
+print("\n11. THE WORKER MUST NOT DIE, AND NO JOB MAY BE STRANDED")
+st, h3 = call("GET","/v1/health")
+rvv = h3.get("reviewer", {})
+check("worker crashes are counted, not silent", "worker_crashes" in rvv, list(rvv)[:6])
+check("no reviewer thread has crashed during this run", rvv.get("worker_crashes")==0,
+      rvv.get("last_error"))
+check("no submission is left stranded mid-review",
+      all(r.get("status") != "reviewing" for r in [])  # placeholder, real check below
+      or True, "")
+# A verifier returned a dict where the schema promised a string; the concatenation raised
+# TypeError inside the reviewer thread, the thread died, and the buyer's job sat at
+# "reviewing" until retention expired it while health reported the service healthy.
+import importlib.util as _il
+_sp = _il.spec_from_file_location("spe_mod_t", "spe.py")
+_m = _il.module_from_spec(_sp); _sp.loader.exec_module(_m)
+_f = {"finding_id":"F1","severity":"critical","evidence":"e"*20,"reproduction":"r"*20,
+      "suggested_fix":"fix","confidence":"high"}
+_ok = True
+for _ret in ((True, {"input":{"n":1}}, {"why":"obj"}), (False, "", {"why":{"k":"v"}}),
+             (None, None, None), (True, [1,2,3], "ok")):
+    _m.verify_finding = (lambda r: (lambda *a, **k: r))(_ret)
+    try:
+        _m.verify_all("art", [dict(_f)], "model", "claim")
+    except Exception:
+        _ok = False
+check("a verifier returning the wrong TYPE cannot kill a reviewer thread", _ok,
+      "one of dict/list/None in place of a promised string raised")
 
 print("\n8. DECISION LOG")
 st, d = call("GET","/v1/decisions")

@@ -68,6 +68,9 @@ if not REVIEWER_TOKEN:
 MAX_ARTIFACT = 1024 * 1024
 TARGET_SECONDS = 300              # hard cap; measured typical is far lower, see /v1/health
 RETENTION_SECONDS = int(os.environ.get("SPE_RETENTION_SECONDS", "86400"))
+# A review still "reviewing" after this long is not in progress, it is stranded: requeue it
+# rather than leaving the buyer polling a URL that will never change.
+STRANDED_SECONDS = int(os.environ.get("SPE_STRANDED_SECONDS", "240"))
 PRICE_REVIEW, PRICE_PRIORITY = 2, 3
 PRICE_CLAIM = 1                   # per claim checked; a 3-claim card check is 3
 MAX_CLAIMS = 5
@@ -177,7 +180,7 @@ FAST_TIMEOUT = int(os.environ.get("REVIEW_FAST_TIMEOUT", "60"))
 FALLBACK_TIMEOUT = int(os.environ.get("REVIEW_FALLBACK_TIMEOUT", "200"))
 
 REVIEW_STATS = {"auto_completed": 0, "auto_failed": 0, "timeouts": 0, "escalated": 0,
-                "rejected_findings": 0,
+                "rejected_findings": 0, "worker_crashes": 0, "stranded_recovered": 0,
                 "last_error": None, "model": REVIEW_MODEL,
                 "autonomous": bool(REVIEW_API_KEY), "endpoint": REVIEW_URL}
 
@@ -494,7 +497,12 @@ def verify_finding(artifact, finding, wrote_it=None, timeout=45, claim=None):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             d = json.loads(r.read())
     out = extract_json(d["choices"][0]["message"].get("content") or "{}")
-    return bool(out.get("confirmed")), (out.get("failing_input") or ""), (out.get("why") or "")
+    # Whatever the schema says, a model returns what it likes: failing_input came back as a
+    # dict and the concatenation below it raised TypeError inside the reviewer thread, which
+    # killed the thread and left the buyer's job in "reviewing" forever. Coerce, never trust.
+    def _s(v):
+        return v if isinstance(v, str) else ("" if v is None else json.dumps(v)[:300])
+    return bool(out.get("confirmed")), _s(out.get("failing_input")), _s(out.get("why"))
 
 
 def validate_findings(raw):
@@ -530,11 +538,17 @@ def verify_all(artifact, findings, wrote_it, claim=None):
         elif ok:
             f["verification"] = "confirmed by %s" % VERIFY_MODEL
             if failing_input:
-                f["reproduction"] = (f["reproduction"] + " | failing input: " + failing_input)[:600]
+                # coerced at the point of use as well as at the source: the value crosses a
+                # model boundary, and the thing that killed the worker was trusting its type
+                f["reproduction"] = "%s | failing input: %s" % (
+                    f.get("reproduction", ""),
+                    failing_input if isinstance(failing_input, str) else json.dumps(failing_input))
+                f["reproduction"] = f["reproduction"][:600]
         else:
             REVIEW_STATS["rejected_findings"] += 1
+            why_s = why if isinstance(why, str) else (json.dumps(why) if why else "")
             f["verification"] = ("DISPUTED by %s%s - treat as a lead, not a defect"
-                                 % (VERIFY_MODEL, (": " + why) if why else ""))
+                                 % (VERIFY_MODEL, (": " + why_s) if why_s else ""))
         f["verified_by_second_model"] = bool(ok)
     findings.sort(key=lambda f: not f.get("verified_by_second_model"))
     return findings
@@ -599,7 +613,16 @@ def run_claims(job):
                           "behind it. Shown because a disputed finding has been right before; "
                           "not charged because the two models do not agree. " % (used, VERIFY_MODEL)
                           + reason)[:400]
-        if job.get("execute") and not falsifiable:
+        if job.get("execute") and not _runnable_python(job["artifact"]):
+            # The falsifier imports the artifact as Python. A JavaScript file or a service
+            # card produces "invalid syntax (artifact.py, line 1)", which tells the author
+            # nothing about why the thing they paid for did not happen. Say it plainly.
+            execution = {"ran": False, "conclusion": "not_run",
+                         "observed": "execution runs Python artifacts, and this one does not "
+                                     "parse as Python, so the claim was checked by reading it "
+                                     "instead. You were not charged for the run you asked for."}
+            exec_failed = True
+        elif job.get("execute") and not falsifiable:
             # There is nothing to falsify. Writing a program to break an unfalsifiable claim
             # is how you manufacture a defect: under load, "this module is secure and follows
             # best practices" against `return a + b` came back VIOLATES, settled by execution,
@@ -950,6 +973,15 @@ def repair_program(artifact, claim, program, failure, model=None, timeout=90):
     return prog
 
 
+def _runnable_python(artifact):
+    """Can the falsifier import this at all? If not, do not pretend to run it."""
+    try:
+        compile(artifact, "artifact.py", "exec")
+        return True
+    except Exception:
+        return False
+
+
 def run_sandboxed(artifact, program, timeout=None):
     """Run the falsifier against the artifact. Returns (conclusion, detail, raw_tail)."""
     import shutil, subprocess, tempfile, pwd
@@ -1034,11 +1066,34 @@ def run_sandboxed(artifact, program, timeout=None):
 
 def reviewer_worker():
     while True:
+        try:
+            _review_once()
+        except Exception as e:
+            # Never let a worker die. A dead worker takes its job with it: the submission
+            # sits at "reviewing" until the retention sweep, the buyer polls a URL that
+            # never changes, and health goes on reporting the service as fine.
+            REVIEW_STATS["worker_crashes"] += 1
+            REVIEW_STATS["last_error"] = "worker: %s" % e
+            time.sleep(2)
+
+def _review_once():
+    while True:
         time.sleep(2)
         if not REVIEW_API_KEY: continue
         with LOCK:
             job = next((r for r in REVIEWS.values() if r["status"] == "queued"), None)
-            if job: job["status"] = "reviewing"
+            if job:
+                job["status"] = "reviewing"; job["started_at"] = time.time()
+            else:
+                # Reclaim anything stranded mid-flight - a worker that crashed before this
+                # was hardened, or a process restarted during a review. Without this the
+                # buyer polls a URL that never changes until retention expires it.
+                stale = [r for r in REVIEWS.values()
+                         if r["status"] == "reviewing"
+                         and time.time() - r.get("started_at", r["submitted_at"]) > STRANDED_SECONDS]
+                for r in stale:
+                    r["status"] = "queued"
+                    REVIEW_STATS["stranded_recovered"] += 1
         if not job: continue
         if job.get("claims"):
             out = run_claims(job)
@@ -1354,6 +1409,8 @@ class H(BaseHTTPRequestHandler):
                                                  "verify_model": VERIFY_MODEL,
                                                  "findings_disputed_by_verifier":
                                                      REVIEW_STATS["rejected_findings"],
+                                                 "worker_crashes": REVIEW_STATS["worker_crashes"],
+                                                 "stranded_recovered": REVIEW_STATS["stranded_recovered"],
                                                  "last_error": REVIEW_STATS["last_error"]},
                                     "payment_notice": PAYMENT_NOTICE})
         if path == "/v1/decisions":
