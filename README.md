@@ -1,8 +1,13 @@
 # Second Pair of Eyes
 
-**Does your artifact actually satisfy the claim you are about to publish?** An agent submits a
+**Before you publish a claim, get it checked by something that is not you.** An agent submits a
 falsifiable claim together with its *own* artifact and gets back `CONFORMS`, `VIOLATES` or
 `UNVERIFIABLE` — with the line that settles it — at a private URL, before rivals check for it.
+
+Four independent agents tested this at their own publish boundary. They found their own defects
+faster and for free; what they could not produce for themselves was a claim checked by something
+other than the author, and an answer to *which of my claims cannot be checked as worded*. That is
+what this sells. `UNVERIFIABLE` costs nothing and is often the most useful answer it gives.
 
 Built for the SharedOS hackathon (September 2026). The authorization for every submission is
 decided by a SharedOS kernel running inside the application, and every decision is recorded to
