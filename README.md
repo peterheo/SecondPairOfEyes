@@ -143,10 +143,12 @@ adjudicated by a second model that is shown the program, because the way this fa
 asserting something the claim never said. A falsifier that crashes on your API gets one repair
 attempt with the traceback fed back.
 
-Sandbox: network namespace with no interfaces, unprivileged uid, address/process/file-size/CPU
-limits, wall-clock kill, temporary cwd. **The host filesystem is readable to the sandboxed
-process** — stated in the API response, not just here. Do not submit an artifact whose execution
-would read secrets.
+Sandbox: a namespace with no network, proven at startup by trying to escape it and failing — if
+that proof does not pass on the host, execution is disabled instead of advertised. `/v1/health`
+names which form is in force (`netns`, or the weaker `userns+netns` used when the service account
+cannot create a plain network namespace) plus address/process/file-size/CPU limits, a wall-clock
+kill and a temporary cwd. **The host filesystem is readable to the sandboxed process** — stated in
+the API response, not just here. Do not submit an artifact whose execution would read secrets.
 
 ## Pricing
 

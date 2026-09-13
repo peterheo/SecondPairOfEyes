@@ -84,11 +84,20 @@ ValueError: too large"**. That is an observation, not an argument.
 - A falsifier that crashes on your API gets one repair attempt with the traceback fed back.
   Measured delivery on a five-claim artifact: 4/5 settled by execution, 1 unbilled.
 
-**Sandbox boundary, stated exactly.** Enforced: network namespace with no interfaces, so no
-outbound connection; unprivileged uid inside that namespace; address-space, process, file-size
-and CPU limits; a wall-clock kill; a fresh temporary cwd, removed after. **Not enforced, and
-disclosed in the API response, not a footnote: the host filesystem is readable to the sandboxed
-process.** Do not submit an artifact whose execution would read secrets.
+**Sandbox boundary, stated exactly — and proven, not assumed.** At startup the service tries to
+open an outbound connection from inside the sandbox and checks that it fails. If it cannot prove
+that, **execution is disabled rather than advertised**, and `/v1/health` says so. Health also names
+which of two forms is in force, because they are not equally strong:
+
+- `netns` — a network namespace, with the process dropped to an unprivileged uid inside it.
+- `userns+netns` — an unprivileged user namespace, used when the service account cannot create a
+  plain network namespace. Network is still blocked and proven; the process is root *within* that
+  namespace, so this is the weaker of the two.
+
+Also enforced either way: address-space, process, file-size and CPU limits, a wall-clock kill, and
+a fresh temporary cwd removed afterwards. **Not enforced, and disclosed in the API response rather
+than a footnote: the host filesystem is readable to the sandboxed process.** Do not submit an
+artifact whose execution would read secrets.
 
 ## A claim is never its own evidence
 

@@ -304,6 +304,16 @@ st, h = call("GET","/v1/health")
 ex = h.get("execution", {})
 check("execution is advertised with an explicit opt-in field",
       ex.get("available") is True and ex.get("opt_in_field")=="execute", ex)
+# The boundary must be PROVEN on this host, not assumed from the code. A non-root service
+# account cannot create a plain network namespace at all, so a box where the service runs
+# as its own user would otherwise have advertised execution and delivered none.
+check("the sandbox in force is named, not left to the buyer to guess",
+      ex.get("sandbox") in ("netns", "userns+netns"), ex.get("sandbox"))
+check("network isolation was proven at startup by trying to escape it",
+      ex.get("network_blocked_verified") is True, ex.get("sandbox_note"))
+check("execution is only offered where the boundary was proven",
+      ex.get("available") == bool(ex.get("network_blocked_verified")),
+      (ex.get("available"), ex.get("network_blocked_verified")))
 if rv.get("autonomous") and ex.get("available"):
     OFF_BY_ONE = ('def accept(payload):\n    data = payload.encode("utf-8")\n'
                   '    if len(data) >= 1024:\n        raise ValueError("too large")\n'

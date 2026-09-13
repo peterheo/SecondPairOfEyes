@@ -24,7 +24,16 @@ def load_env(*paths):
     for p in paths:
         if not p or not os.path.exists(p):
             continue
-        for raw in open(p):
+        try:
+            lines = open(p).readlines()
+        except OSError as e:
+            # a .env we are not allowed to read is a deployment problem, not a reason to
+            # refuse to start: the service may have everything it needs from the real
+            # environment. Say so once and carry on.
+            print("warning: cannot read %s (%s); continuing with the environment" % (p, e),
+                  flush=True)
+            continue
+        for raw in lines:
             line = raw.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -38,12 +47,23 @@ load_env(os.environ.get("SPE_ENV_FILE"),
 REVIEWER_TOKEN_FILE = os.path.join(STATE, "reviewer_token")
 REVIEWER_TOKEN = os.environ.get("SPE_REVIEWER_TOKEN", "").strip()
 if not REVIEWER_TOKEN:
-    if os.path.exists(REVIEWER_TOKEN_FILE):
-        REVIEWER_TOKEN = open(REVIEWER_TOKEN_FILE).read().strip()
-    else:
+    try:
+        REVIEWER_TOKEN = (open(REVIEWER_TOKEN_FILE).read().strip()
+                          if os.path.exists(REVIEWER_TOKEN_FILE) else "")
+    except OSError as e:
+        # the reviewer path is the human-fallback queue; an unreadable token file must not
+        # take the whole service down, so mint a fresh one for this process and say so
+        print("warning: cannot read %s (%s); using a per-process reviewer token"
+              % (REVIEWER_TOKEN_FILE, e), flush=True)
         REVIEWER_TOKEN = secrets.token_urlsafe(24)
-        fd = os.open(REVIEWER_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        os.write(fd, REVIEWER_TOKEN.encode()); os.close(fd)
+    if not REVIEWER_TOKEN:
+        REVIEWER_TOKEN = secrets.token_urlsafe(24)
+        try:
+            fd = os.open(REVIEWER_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.write(fd, REVIEWER_TOKEN.encode()); os.close(fd)
+        except OSError as e:
+            print("warning: cannot persist the reviewer token (%s); it will not survive a "
+                  "restart" % e, flush=True)
 
 MAX_ARTIFACT = 1024 * 1024
 TARGET_SECONDS = 300              # hard cap; measured typical is far lower, see /v1/health
@@ -649,11 +669,54 @@ def run_claims(job):
 # What is NOT enforced, and is disclosed on every executed result: the host
 # filesystem is readable to the sandboxed process. Do not submit an artifact
 # whose execution would read secrets from the machine it runs on.
-EXEC_ENABLED = os.environ.get("SPE_EXECUTE", "1") not in ("0", "false", "no")
+_EXEC_REQUESTED = os.environ.get("SPE_EXECUTE", "1") not in ("0", "false", "no")
 EXEC_TIMEOUT = int(os.environ.get("SPE_EXEC_TIMEOUT", "20"))
 EXEC_UID = os.environ.get("SPE_EXEC_UID", "nobody")
 EXEC_STATS = {"ran": 0, "falsified": 0, "held": 0, "inconclusive": 0, "errors": 0,
               "repaired": 0, "repair_worked": 0, "last_error": None}
+
+def _probe_sandbox(argv):
+    """Does this argv actually give us a namespace with no network? Prove it, don't assume."""
+    import subprocess, tempfile, textwrap
+    prog = textwrap.dedent("""
+        import socket, sys
+        try:
+            socket.create_connection(("1.1.1.1", 53), timeout=3)
+            print("OPEN")
+        except Exception:
+            print("BLOCKED")
+    """)
+    d = tempfile.mkdtemp(prefix="spe_probe_")
+    try:
+        f = os.path.join(d, "p.py")
+        open(f, "w").write(prog)
+        r = subprocess.run(argv + ["python3", "p.py"], cwd=d, capture_output=True, timeout=25)
+        return (r.stdout or b"").decode().strip().endswith("BLOCKED")
+    except Exception:
+        return False
+    finally:
+        import shutil; shutil.rmtree(d, ignore_errors=True)
+
+def _choose_sandbox():
+    """Pick the strongest namespace this process can actually create, here, now.
+
+    A non-root service account cannot create a network namespace with plain `unshare -n`
+    - it fails EPERM - so a box where the service runs as its own user would have produced
+    zero executions while the card advertised execution. The unprivileged user-namespace
+    form works there. Which one is in use is reported at /v1/health, because the weaker
+    form has a weaker boundary and nobody should have to guess which they got.
+    """
+    for argv, name in ((["unshare", "-n", "--fork"], "netns"),
+                       (["unshare", "-Urn", "--fork"], "userns+netns")):
+        if _probe_sandbox(argv):
+            return argv, name, True
+    return ["unshare", "-Urn", "--fork"], "userns+netns", False
+
+SANDBOX_CMD, SANDBOX_KIND, SANDBOX_VERIFIED = _choose_sandbox() if _EXEC_REQUESTED else (
+    ["unshare", "-Urn", "--fork"], "none", False)
+# Advertising execution on a host where the boundary could not be proven would be the
+# same defect this service sells against, so it simply does not offer it there.
+EXEC_ENABLED = _EXEC_REQUESTED and SANDBOX_VERIFIED
 
 EXEC_PROMPT = """Write a Python program that tries to FALSIFY one claim about the artifact below.
 
@@ -757,7 +820,13 @@ Also: a claim about resulting STATE is not falsified by an exception being raise
 is as claimed; a claim about what is REJECTED is not falsified by how the rejection was
 signalled, unless the claim said how.
 
-Answer false unless the run shows the artifact failing the claim as the claim is worded.
+Both mistakes are costly and neither is the safe default. Rejecting a true falsification sends the
+author to publish a claim their code does not support - the exact thing they paid to avoid.
+Accepting a false one sends them to rewrite working code. Judge on the merits:
+- answer TRUE when the program exercised what the claim is about and the artifact did not do what
+  the claim says. A claim that a value is accepted, tested by passing that value and observing a
+  rejection, is falsified - that is the ordinary case and it is not a scope problem.
+- answer FALSE when the program's expectation came from somewhere other than the claim.
 
 Return STRICT JSON only: {"falsifies":true|false,"why":"one sentence"}
 """
@@ -832,7 +901,7 @@ def run_sandboxed(artifact, program, timeout=None):
         with open(os.path.join(d, "falsify.py"), "w") as f: f.write(program)
         uid = gid = None
         try:
-            if os.geteuid() == 0:
+            if os.geteuid() == 0 and SANDBOX_KIND == "netns":
                 pw = pwd.getpwnam(EXEC_UID); uid, gid = pw.pw_uid, pw.pw_gid
                 os.chmod(d, 0o777)
                 for n in ("artifact.py", "falsify.py"): os.chmod(os.path.join(d, n), 0o444)
@@ -858,7 +927,7 @@ def run_sandboxed(artifact, program, timeout=None):
                    "os.setuid(%d)\n" % uid if uid is not None else ""))
         with open(os.path.join(d, "_shim.py"), "w") as f: f.write(shim)
         if uid is not None: os.chmod(os.path.join(d, "_shim.py"), 0o444)
-        cmd = ["unshare", "-n", "--fork", "python3", "_shim.py"]
+        cmd = SANDBOX_CMD + ["python3", "_shim.py"]
         try:
             p = subprocess.run(cmd, cwd=d, capture_output=True, timeout=timeout + 5,
                                preexec_fn=limits, env={"PYTHONDONTWRITEBYTECODE": "1",
@@ -1180,6 +1249,15 @@ class H(BaseHTTPRequestHandler):
                                     "execution": {"available": EXEC_ENABLED,
                                                   "opt_in_field": "execute",
                                                   "timeout_seconds": EXEC_TIMEOUT,
+                                                  "sandbox": SANDBOX_KIND,
+                                                  "network_blocked_verified": SANDBOX_VERIFIED,
+                                                  "sandbox_note": (
+                                                      "network isolation was proven at startup by "
+                                                      "attempting an outbound connection from "
+                                                      "inside the sandbox and failing to make it"
+                                                      if SANDBOX_VERIFIED else
+                                                      "NETWORK ISOLATION COULD NOT BE PROVEN ON "
+                                                      "THIS HOST - execution is disabled"),
                                                   "ran": EXEC_STATS["ran"],
                                                   "falsified": EXEC_STATS["falsified"],
                                                   "held": EXEC_STATS["held"],
